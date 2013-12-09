@@ -9,11 +9,11 @@ const char * const FRAG = "#version 150 core\n" QUOTE(
 	in vec3 vert_color;
 	in vec2 vert_texcoord;
 	out vec4 out_color;
-	//uniform sampler2D sTexture;
+	uniform sampler2D sTexture;
 
 	void main(void) {
-		//gl_FragColor = texture2D(sTexture, vert_texcoord);
-		out_color = vec4(vert_color, 0.5);
+		out_color = texture(sTexture, vert_texcoord);
+		//out_color = vec4(vert_color, 0.5);
 	}
 );
 

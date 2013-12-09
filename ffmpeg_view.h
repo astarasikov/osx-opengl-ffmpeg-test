@@ -4,7 +4,6 @@
 #import "common.h"
 
 @interface FfmpegView : NSOpenGLView <NSWindowDelegate>
-
 -(void)registerDisplayLink;
 -(void)renderForTime:(CVTimeStamp)time;
 -(void)windowWillClose:(NSNotification*)note;

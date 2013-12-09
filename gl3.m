@@ -4,6 +4,10 @@
 #import "opengl_utils.h"
 #import <math.h>
 
+#include <libavformat/avformat.h>
+#include <libavcodec/avcodec.h>
+#include <libswscale/swscale.h>
+
 static CVReturn displayCallback(CVDisplayLinkRef displayLink,
 	const CVTimeStamp *inNow, const CVTimeStamp *inOutputTime,
 	CVOptionFlags flagsIn, CVOptionFlags *flagsOut,
@@ -41,19 +45,25 @@ static CVReturn displayCallback(CVDisplayLinkRef displayLink,
 
 -(void)renderQuad
 {
-	const float side = 0.5f;
+	const float side = 0.7f;
 	GLfloat data[] = {
 		//vertex coordinates
-		0.0f, 0.0f, 0.0f,
-		side, 0.0f, 0.0f,
+		-side, -side, 0.0f,
+		side, -side, 0.0f,
 		side, side, 0.0f,
-		0.0f, side, 0.0f,
+		-side, side, 0.0f,
 
 		//colors
 		1, 0, 0,
 		0, 1, 0,
 		0, 0, 1,
 		1, 1, 1,
+
+		//texture coordinates
+		0, 0,
+		1, 0,
+		1, 1,
+		0, 1,
 	};
 
 	GLuint indices[] = {
@@ -69,13 +79,13 @@ static CVReturn displayCallback(CVDisplayLinkRef displayLink,
 
 	size_t vtxStride = 3;
 	size_t colStride = 3;
-	size_t texStride = vtxStride;
+	size_t texStride = 2;
 	size_t numVertices = 4;
 	size_t numIndices = sizeof(indices)/sizeof(indices[0]);
 
 	size_t coordOffset = 0;
 	size_t colorOffset = 12;
-	size_t texOffset = 0;
+	size_t texOffset = 24;
 
 	static GLuint pid = 0;
 	static GLuint vao = 0;
@@ -118,16 +128,17 @@ static CVReturn displayCallback(CVDisplayLinkRef displayLink,
 		ogl(oglProgramLog(pid));
 		init = 1;
 	}
-	GLuint positionAttr, colorAttr, texCoordAttr, texUniform, MVP;
+	GLuint positionAttr, colorAttr, texCoordAttr, texUniform, MVP,
+		sampler;
 	
 	ogl(glUseProgram(pid));
 	ogl(glBindVertexArray(vao));
-
 	ogl(positionAttr = glGetAttribLocation(pid, "position"));
 	ogl(colorAttr = glGetAttribLocation(pid, "color"));
 	ogl(texCoordAttr = glGetAttribLocation(pid, "texcoord"));
 	ogl(texUniform = glGetUniformLocation(pid, "sTexture"));
 	ogl(MVP = glGetUniformLocation(pid, "MVP"));
+	ogl(sampler = glGetUniformLocation(pid, "texture"));
 
 	ogl(glBindBuffer(GL_ARRAY_BUFFER, vbo));
 	ogl(glBufferData(GL_ARRAY_BUFFER, sizeof(data), data, GL_STATIC_DRAW));
@@ -149,12 +160,14 @@ static CVReturn displayCallback(CVDisplayLinkRef displayLink,
 	ogl(glEnableVertexAttribArray(colorAttr));
 	ogl(glEnableVertexAttribArray(texCoordAttr));
 
-	glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+	//ogl(glActiveTexture(GL_TEXTURE0));
+	//ogl(glBindTexture(GL_TEXTURE_2D, 0));
+	//ogl(glUniform1i(sampler, 1));
 
 	ogl(glDrawElements(GL_TRIANGLES, numIndices, GL_UNSIGNED_INT, 0));
-	ogl(glDrawElements(GL_TRIANGLE_FAN, numIndices, GL_UNSIGNED_INT, 0));
+	//ogl(glDrawElements(GL_TRIANGLE_FAN, numIndices, GL_UNSIGNED_INT, 0));
 	ogl(glDrawElements(GL_POINTS, numIndices, GL_UNSIGNED_INT, indices));
-	ogl(glDrawArrays(GL_TRIANGLES, 0, 4));
+	//ogl(glDrawArrays(GL_TRIANGLES, 0, 4));
 
 	ogl(glDisableVertexAttribArray(texCoordAttr));
 	ogl(glDisableVertexAttribArray(colorAttr));
@@ -171,21 +184,48 @@ static CVReturn displayCallback(CVDisplayLinkRef displayLink,
 	if ([self lockFocusIfCanDraw] == NO) {
 		return;
 	}
-	static int i = 0;
-	double s = sin((i++ % 628) / 100.0);
+	CGLContextObj contextObj = [[self openGLContext] CGLContextObj];
+	CGLLockContext(contextObj);
+
 	ogl(glViewport(0, 0, self.frame.size.width, self.frame.size.height));
-	//glEnable(GL_CULL_FACE);
-	//checkAndReportGlError;
+	glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
 	ogl(glEnable(GL_DEPTH_TEST));
 	ogl(glEnable(GL_BLEND));
-    //glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-	//glEnable(GL_TEXTURE_2D);
-	//checkAndReportGlError;
+    ogl(glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA));
 	ogl(glClearColor(1, 1, 1, 1));
 	ogl(glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT));
-	//glClearColor(0.0, 0.0, s >= 0 ? s : -s, 0.0);
 	[self renderQuad];
 	[[self openGLContext] flushBuffer];
+
+	CGLUnlockContext(contextObj);
+	[self unlockFocus];
+}
+
+-(void)setTexture:(AVFrame*)frame {
+	if ([self lockFocusIfCanDraw] == NO) {
+		return;
+	}
+	CGLContextObj contextObj = [[self openGLContext] CGLContextObj];
+	CGLLockContext(contextObj);
+
+	static int texture = -1;
+	if (texture < 0) {
+		ogl(glGenTextures(1, &texture));
+	}
+	ogl(glBindTexture(GL_TEXTURE_2D, texture));
+		
+	ogl(glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR));
+	ogl(glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR));
+	ogl(glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE));
+	ogl(glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE));
+
+	ogl(glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB,
+		frame->width, frame->height, 0, GL_RED,
+		GL_UNSIGNED_BYTE, frame->data[0]));
+
+	ogl(glActiveTexture(GL_TEXTURE0));
+	
+	CGLUnlockContext(contextObj);
 	[self unlockFocus];
 }
 
@@ -200,15 +240,11 @@ static CVReturn displayCallback(CVDisplayLinkRef displayLink,
 }
 @end
 
-#include <libavformat/avformat.h>
-#include <libavcodec/avcodec.h>
-#include <libswscale/swscale.h>
-
 #define VIDEO_PATH "~/Downloads/video.mkv"
 
 #define IS_VIDEO(stream) (stream->codec->codec_type == AVMEDIA_TYPE_VIDEO)
 
-static void init_ffmpeg(void) {
+static void init_ffmpeg(id controller) {
 	NSString *nspath = [@VIDEO_PATH stringByExpandingTildeInPath];
 	const char *path = [nspath UTF8String];
 
@@ -271,11 +307,12 @@ static void init_ffmpeg(void) {
 		}
 
 		NSLog(@"Decoded frame data=%p fmt=%x width=%d height=%d qstride=%d",
-			frame->data,
+			frame->data[0],
 			frame->format,
 			frame->width,
 			frame->height,
 			frame->qstride);
+		[[controller glView] setTexture: frame];
 	}
 	avcodec_free_frame(&frame);
 	avcodec_close(codec_context);
@@ -287,11 +324,19 @@ fail_open:
 	[nspath release];
 }
 
+static void async_ffmpeg(id controller) {
+	dispatch_queue_t q = dispatch_queue_create("q_ffmpeg", NULL);
+	dispatch_async(q, ^{
+		init_ffmpeg(controller);
+	});
+	dispatch_release(q);
+}
+
 int main(int argc, char** argv) {
-	//init_ffmpeg();
 	NSAutoreleasePool *pool = [NSAutoreleasePool new];
 	NSApplication *app = [NSApplication sharedApplication];
 	GLController *controller = [[GLController alloc] init];
+	async_ffmpeg(controller);
 	[app run];
 	[pool release];
 	return 0;
