@@ -1,8 +1,7 @@
 #ifndef __FFMPEG_VIEW__H__
 #define __FFMPEG_VIEW__H__
 
-#import <CoreVideo/CVDisplayLink.h>
-#import <OpenGL/gl3.h>
+#import "common.h"
 
 @interface FfmpegView : NSOpenGLView <NSWindowDelegate>
 

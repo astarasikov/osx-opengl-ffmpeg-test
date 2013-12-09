@@ -1,7 +1,7 @@
-#import <Foundation/Foundation.h>
-#import <Cocoa/Cocoa.h>
-
 #import "ffmpeg_view.h"
+#import "ffmpeg_gl_controller.h"
+#import "opengl_shaders.h"
+#import "opengl_utils.h"
 #import <math.h>
 
 static CVReturn displayCallback(CVDisplayLinkRef displayLink,
@@ -39,90 +39,6 @@ static CVReturn displayCallback(CVDisplayLinkRef displayLink,
 	CVDisplayLinkStart(displayLink);
 }
 
-#define QUOTE(A) #A
-
-const char * const FRAG = "#version 150 core\n" QUOTE(
-	in vec3 vert_color;
-	in vec2 vert_texcoord;
-	out vec4 out_color;
-	//uniform sampler2D sTexture;
-
-	void main(void) {
-		//gl_FragColor = texture2D(sTexture, vert_texcoord);
-		out_color = vec4(vert_color, 0.5);
-	}
-);
-
-const char * const VERT = "#version 150 core\n" QUOTE(
-	uniform mat4 MVP;
-	in vec4 position;
-	in vec3 color;
-	in vec2 texcoord;
-	out vec3 vert_color;
-	out vec2 vert_texcoord;
-
-	void main(void) {
-		gl_Position = position;
-		vert_color=color;
-		vert_texcoord=texcoord;
-	}
-);
-
-#define checkAndReportGlError do { \
-	int _err = glGetError(); \
-	if (_err) { \
-		NSLog(@"GL Error %d at %d, %s", _err, __LINE__, __func__); \
-	} \
-} while (0)
-
--(void)glProgLog:(int)pid {
-	GLint logLen;
-	GLsizei realLen;
-
-	glGetProgramiv(pid, GL_INFO_LOG_LENGTH, &logLen);
-	char* log = (char*)malloc(logLen);
-	if (log) {
-		glGetProgramInfoLog(pid, logLen, &realLen, log);
-		NSLog(@"program %d log %s", pid, log);
-		free(log);
-	}
-}
-
--(void)glShaderLog:(int)pid {
-	GLint logLen;
-	GLsizei realLen;
-
-	glGetShaderiv(pid, GL_INFO_LOG_LENGTH, &logLen);
-	char* log = (char*)malloc(logLen);
-	if (log) {
-		glGetShaderInfoLog(pid, logLen, &realLen, log);
-		NSLog(@"shader %d log %s", pid, log);
-		free(log);
-	}
-}
-
--(void)projMatrix:(GLfloat*)data : 
-	(GLfloat)fovy :(GLfloat)aspect :
-	(GLfloat)z_near :(GLfloat)z_far
-{
-		float ymax = z_near * tan(fovy * M_PI / 360.0);
-		float width = 2 * ymax;
-
-		float depth = z_far - z_near;
-		float d = -(z_far + z_near) / depth;
-		float dn = -2 * (z_far * z_near) / depth;
-
-		float w = 2 * z_near / width;
-		float h = w * aspect;
-
-		memset((void*)data, 0, 16 * sizeof(GLfloat));
-		data[0] = w;
-		data[5] = h;
-		data[10] = d;
-		data[11] = -1;
-		data[14] = dn;
-}
-
 -(void)renderQuad
 {
 	const float side = 0.5f;
@@ -149,7 +65,7 @@ const char * const VERT = "#version 150 core\n" QUOTE(
 	};
 
 	float aspect = ((float)self.frame.size.width)/self.frame.size.height;
-	[self projMatrix:mvp_data:45.0:aspect:1:100];
+	projMatrix(mvp_data, 45.0, aspect, 1.0, 100.0);
 
 	size_t vtxStride = 3;
 	size_t colStride = 3;
@@ -167,159 +83,110 @@ const char * const VERT = "#version 150 core\n" QUOTE(
 
 	static int init = 0;
 	if (!init) {
-		glGenVertexArrays(1, &vao);
-		checkAndReportGlError;
-		glBindVertexArray(vao);
-		checkAndReportGlError;
-		glGenBuffers(1, &vbo);
-		checkAndReportGlError;
-		glGenBuffers(1, &vbo_idx);
-		checkAndReportGlError;
-
-		pid = glCreateProgram();
+		// should really do this on context loss/reinit
+		ogl(glGenVertexArrays(1, &vao));
+		ogl(glBindVertexArray(vao));
+		ogl(glGenBuffers(1, &vbo));
+		ogl(glGenBuffers(1, &vbo_idx));
+		
+		ogl(pid = glCreateProgram());
 
 		const char * const vsrc = VERT;
 		const char * const fsrc = FRAG;
-		
-		GLuint vert = glCreateShader(GL_VERTEX_SHADER);
-		checkAndReportGlError;
-		GLuint frag = glCreateShader(GL_FRAGMENT_SHADER);
-		checkAndReportGlError;
 
-		glShaderSource(vert, 1, &vsrc, NULL);
-		glCompileShader(vert);
-		checkAndReportGlError;
-		[self glShaderLog:vert];
-		glShaderSource(frag, 1, &fsrc, NULL);
-		glCompileShader(frag);
-		checkAndReportGlError;
-		[self glShaderLog:frag];
+		GLuint vert, frag;
+		ogl(vert = glCreateShader(GL_VERTEX_SHADER));
+		ogl(frag = glCreateShader(GL_FRAGMENT_SHADER));
 
-		glAttachShader(pid, frag);
-		checkAndReportGlError;
-		glAttachShader(pid, vert);
-		checkAndReportGlError;
+		ogl(glShaderSource(vert, 1, &vsrc, NULL));
+		ogl(glCompileShader(vert));
+		oglShaderLog(vert);
 
-		glBindAttribLocation(pid, 0, "position");
-		checkAndReportGlError;
-		glBindAttribLocation(pid, 1, "color");
-		glBindAttribLocation(pid, 2, "texcoord");
-		glBindFragDataLocation(pid, 0, "out_color");
+		ogl(glShaderSource(frag, 1, &fsrc, NULL));
+		ogl(glCompileShader(frag));
+		oglShaderLog(frag);
 
-		glLinkProgram(pid);
-		int status;
-		[self glProgLog:pid];
-		checkAndReportGlError;
+		ogl(glAttachShader(pid, frag));
+		ogl(glAttachShader(pid, vert));
+
+		ogl(glBindAttribLocation(pid, 0, "position"));
+		ogl(glBindAttribLocation(pid, 1, "color"));
+		ogl(glBindAttribLocation(pid, 2, "texcoord"));
+		ogl(glBindFragDataLocation(pid, 0, "out_color"));
+
+		ogl(glLinkProgram(pid));
+		ogl(oglProgramLog(pid));
 		init = 1;
 	}
 	GLuint positionAttr, colorAttr, texCoordAttr, texUniform, MVP;
 	
-	glUseProgram(pid);
-	checkAndReportGlError;
+	ogl(glUseProgram(pid));
+	ogl(glBindVertexArray(vao));
 
-	glBindVertexArray(vao);
-	checkAndReportGlError;
+	ogl(positionAttr = glGetAttribLocation(pid, "position"));
+	ogl(colorAttr = glGetAttribLocation(pid, "color"));
+	ogl(texCoordAttr = glGetAttribLocation(pid, "texcoord"));
+	ogl(texUniform = glGetUniformLocation(pid, "sTexture"));
+	ogl(MVP = glGetUniformLocation(pid, "MVP"));
 
-	positionAttr = glGetAttribLocation(pid, "position");
-	checkAndReportGlError;
+	ogl(glBindBuffer(GL_ARRAY_BUFFER, vbo));
+	ogl(glBufferData(GL_ARRAY_BUFFER, sizeof(data), data, GL_STATIC_DRAW));
 
-	colorAttr = glGetAttribLocation(pid, "color");
-	checkAndReportGlError;
+	ogl(glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, vbo_idx));
+	ogl(glBufferData(GL_ELEMENT_ARRAY_BUFFER,
+		sizeof(indices), indices, GL_STATIC_DRAW));
 
-	texCoordAttr = glGetAttribLocation(pid, "texcoord");
-	checkAndReportGlError;
+	ogl(glVertexAttribPointer(positionAttr, vtxStride, GL_FLOAT, GL_FALSE, 0,
+		(GLvoid*)(coordOffset * sizeof(GLfloat))));
+	ogl(glVertexAttribPointer(colorAttr, colStride, GL_FLOAT, GL_FALSE, 0,
+		(GLvoid*)(colorOffset * sizeof(GLfloat))));
+	ogl(glVertexAttribPointer(texCoordAttr, texStride, GL_FLOAT, GL_FALSE, 0,
+		(GLvoid*)(texOffset * sizeof(GLfloat))));
 
-	texUniform = glGetUniformLocation(pid, "sTexture");
-	checkAndReportGlError;
+	ogl(glUniformMatrix4fv(MVP, 1, GL_FALSE, mvp_data));
 
-	MVP = glGetUniformLocation(pid, "MVP");
-	checkAndReportGlError;
-
-	glBindBuffer(GL_ARRAY_BUFFER, vbo);
-	checkAndReportGlError;
-	glBufferData(GL_ARRAY_BUFFER, sizeof(data), data, GL_STATIC_DRAW);
-	checkAndReportGlError;
-
-	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, vbo_idx);
-	checkAndReportGlError;
-	glBufferData(GL_ELEMENT_ARRAY_BUFFER,
-		sizeof(indices), indices, GL_STATIC_DRAW);
-	checkAndReportGlError;
-
-	glVertexAttribPointer(positionAttr, vtxStride, GL_FLOAT, GL_FALSE, 0,
-		(GLvoid*)(coordOffset * sizeof(GLfloat)));
-	checkAndReportGlError;
-	glVertexAttribPointer(colorAttr, colStride, GL_FLOAT, GL_FALSE, 0,
-		(GLvoid*)(colorOffset * sizeof(GLfloat)));
-	checkAndReportGlError;
-	glVertexAttribPointer(texCoordAttr, texStride, GL_FLOAT, GL_FALSE, 0,
-		(GLvoid*)(texOffset * sizeof(GLfloat)));
-	checkAndReportGlError;
-
-	glUniformMatrix4fv(MVP, 1, GL_FALSE, mvp_data);
-	checkAndReportGlError;
-	
-	glEnableVertexAttribArray(positionAttr);
-	checkAndReportGlError;
-	glEnableVertexAttribArray(colorAttr);
-	checkAndReportGlError;
-	glEnableVertexAttribArray(texCoordAttr);
-	checkAndReportGlError;
+	ogl(glEnableVertexAttribArray(positionAttr));
+	ogl(glEnableVertexAttribArray(colorAttr));
+	ogl(glEnableVertexAttribArray(texCoordAttr));
 
 	glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
 
-	glDrawElements(GL_TRIANGLES, numIndices, GL_UNSIGNED_INT, 0);
-	glDrawElements(GL_TRIANGLE_FAN, numIndices, GL_UNSIGNED_INT, 0);
-	glDrawElements(GL_POINTS, numIndices, GL_UNSIGNED_INT, indices);
-	glDrawArrays(GL_TRIANGLES, 0, 4);
-	checkAndReportGlError;
+	ogl(glDrawElements(GL_TRIANGLES, numIndices, GL_UNSIGNED_INT, 0));
+	ogl(glDrawElements(GL_TRIANGLE_FAN, numIndices, GL_UNSIGNED_INT, 0));
+	ogl(glDrawElements(GL_POINTS, numIndices, GL_UNSIGNED_INT, indices));
+	ogl(glDrawArrays(GL_TRIANGLES, 0, 4));
 
-	glDisableVertexAttribArray(texCoordAttr);
-	checkAndReportGlError;
-	glDisableVertexAttribArray(colorAttr);
-	checkAndReportGlError;
-	glDisableVertexAttribArray(positionAttr);
-	checkAndReportGlError;
+	ogl(glDisableVertexAttribArray(texCoordAttr));
+	ogl(glDisableVertexAttribArray(colorAttr));
+	ogl(glDisableVertexAttribArray(positionAttr));
 
-	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
-	checkAndReportGlError;
-	glBindBuffer(GL_ARRAY_BUFFER, 0);
-	checkAndReportGlError;
-	glBindVertexArray(0);
-	checkAndReportGlError;
+	ogl(glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0));
+	ogl(glBindBuffer(GL_ARRAY_BUFFER, 0));
+	ogl(glBindVertexArray(0));
 }
 
 -(void)renderForTime:(CVTimeStamp)time
 {
 	NSLog(@"Render");
-	//CGLContextObj contextObj = [[self openGLContext] CGLContextObj];
-	//CGLLockContext(contextObj);
-	//[self lockFocus];
 	if ([self lockFocusIfCanDraw] == NO) {
 		return;
 	}
 	static int i = 0;
 	double s = sin((i++ % 628) / 100.0);
-	glViewport(0, 0, self.frame.size.width, self.frame.size.height);
-	checkAndReportGlError;
+	ogl(glViewport(0, 0, self.frame.size.width, self.frame.size.height));
 	//glEnable(GL_CULL_FACE);
 	//checkAndReportGlError;
-	glEnable(GL_DEPTH_TEST);
-	checkAndReportGlError;
-	glEnable(GL_BLEND);
-	checkAndReportGlError;
+	ogl(glEnable(GL_DEPTH_TEST));
+	ogl(glEnable(GL_BLEND));
     //glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 	//glEnable(GL_TEXTURE_2D);
 	//checkAndReportGlError;
-	glClearColor(1, 1, 1, 1);
-	checkAndReportGlError;
-	glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
-	checkAndReportGlError;
+	ogl(glClearColor(1, 1, 1, 1));
+	ogl(glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT));
 	//glClearColor(0.0, 0.0, s >= 0 ? s : -s, 0.0);
 	[self renderQuad];
 	[[self openGLContext] flushBuffer];
 	[self unlockFocus];
-	//CGLUnlockContext(contextObj);
 }
 
 -(void)dealloc
@@ -330,70 +197,6 @@ const char * const VERT = "#version 150 core\n" QUOTE(
 -(void)windowWillClose:(NSNotification *)note {
 	CVDisplayLinkRelease(displayLink);
 	[[NSApplication sharedApplication] terminate:self];
-}
-@end
-
-@interface GLController : NSWindow
--(void)createGLView;
-
-@property(nonatomic, readwrite, retain) FfmpegView *glView;
-@end
-
-@implementation GLController
--(id)init
-{
-	self = [super initWithContentRect: NSMakeRect(0, 0, 640, 480)
-		styleMask: NSTitledWindowMask|NSResizableWindowMask|
-			NSClosableWindowMask|NSMiniaturizableWindowMask
-		backing: NSBackingStoreBuffered
-		defer: false];
-
-	[self setTitle: @"Opengl Test"];
-	[self center];
-	[self createGLView];
-	[self setDelegate:[self glView]];
-	[self makeKeyAndOrderFront:nil];
-	[self display];
-
-	return self;
-}
-
--(void)createGLView
-{
-	NSOpenGLPixelFormatAttribute attribs[] = {
-		NSOpenGLPFAOpenGLProfile, NSOpenGLProfileVersion3_2Core,
-		NSOpenGLPFAColorSize, 24,
-		NSOpenGLPFAAlphaSize, 8,
-		NSOpenGLPFADepthSize, 24,
-		NSOpenGLPFAStencilSize, 8,
-		NSOpenGLPFADoubleBuffer,
-		NSOpenGLPFAAccelerated,
-		NSOpenGLPFANoRecovery,
-		NSOpenGLPFAClosestPolicy,
-		0,
-	};
-
-	NSOpenGLPixelFormat *pixelFormat =
-	[
-		[[NSOpenGLPixelFormat alloc]
-			initWithAttributes:attribs]
-	autorelease];
-
-	[self setGlView:
-		[
-			[[FfmpegView alloc]
-				initWithFrame: [[self contentView] bounds]
-				pixelFormat:pixelFormat]
-		autorelease]
-	];
-	[[[self glView] openGLContext] makeCurrentContext];
-	[self setContentView:[self glView]];
-}
-
--(void)dealloc
-{
-	[[self glView] release];
-	[super dealloc];
 }
 @end
 

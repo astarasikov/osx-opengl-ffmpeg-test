@@ -8,7 +8,8 @@ LDFLAGS=-framework Cocoa \
 	-lavformat
 
 CFILES = \
-	gl3.m
+	gl3.m \
+	ffmpeg_gl_controller.m
 
 OBJFILES=$(patsubst %.m,%.o,$(CFILES))
 
