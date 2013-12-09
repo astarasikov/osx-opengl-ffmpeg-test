@@ -1,0 +1,7 @@
+a.out
+*.o
+gl3
+gl3.app/Contents/MacOS/gl3
+.DS_Store
+.cproject
+.project
