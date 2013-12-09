@@ -9,7 +9,8 @@ LDFLAGS=-framework Cocoa \
 
 CFILES = \
 	gl3.m \
-	ffmpeg_gl_controller.m
+	ffmpeg_gl_controller.m \
+	opengl_view.m
 
 OBJFILES=$(patsubst %.m,%.o,$(CFILES))
 

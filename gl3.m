@@ -2,176 +2,158 @@
 #import "ffmpeg_gl_controller.h"
 #import "opengl_shaders.h"
 #import "opengl_utils.h"
+#import "opengl_view.h"
 #import <math.h>
 
-#include <libavformat/avformat.h>
-#include <libavcodec/avcodec.h>
-#include <libswscale/swscale.h>
+#define QuadSide 0.7f 
 
-static CVReturn displayCallback(CVDisplayLinkRef displayLink,
-	const CVTimeStamp *inNow, const CVTimeStamp *inOutputTime,
-	CVOptionFlags flagsIn, CVOptionFlags *flagsOut,
-	void *displayLinkContext)
-{
-	FfmpegView *view = (FfmpegView*)displayLinkContext;
-	[view renderForTime: *inOutputTime];
-	return kCVReturnSuccess;
-}
+static GLfloat QuadData[] = {
+	//vertex coordinates
+	-QuadSide, -QuadSide, 0.0f,
+	QuadSide, -QuadSide, 0.0f,
+	QuadSide, QuadSide, 0.0f,
+	-QuadSide, QuadSide, 0.0f,
+
+	//colors
+	1, 0, 0,
+	0, 1, 0,
+	0, 0, 1,
+	1, 1, 1,
+
+	//texture coordinates
+	0, 0,
+	1, 0,
+	1, 1,
+	0, 1,
+};
+
+static GLuint QuadIndices[] = {
+	0, 1, 2,
+	0, 2, 3,
+};
+
+static const size_t VertexStride = 3;
+static const size_t ColorStride = 3;
+static const size_t TexCoordStride = 2;
+
+static const size_t CoordOffset = 0;
+static const size_t ColorOffset = 12;
+static const size_t TexCoordOffset = 24;
+
+static const size_t NumVertices = 4;
+static const size_t NumIndices = 6;//sizeof(QuadIndices) / sizeof(QuadIndices[0]);
 
 @implementation FfmpegView
 {
-	CVDisplayLinkRef displayLink;
+	GLuint _programId;
+	GLuint _vao;
+	GLuint _vbo;
+	GLuint _vbo_idx;
+
+	GLuint _positionAttr;
+	GLuint _colorAttr;
+	GLuint _texCoordAttr;
+
+	GLuint _textures[3];
 }
 
--(id)initWithFrame:(NSRect)frameRect pixelFormat:(NSOpenGLPixelFormat*)format
+-(void)initializeContext
 {
-	self = [super initWithFrame:frameRect pixelFormat:format];
-	[self registerDisplayLink];
-	return self;
-}
+	static int init = 0;
+	if (init) {
+		return;
+	}
 
--(void)registerDisplayLink
-{
-	CGDirectDisplayID displayID = CGMainDisplayID();
-	CVReturn error = CVDisplayLinkCreateWithCGDisplay(displayID, &displayLink);
-	NSAssert((kCVReturnSuccess == error),
-		@"Creating Display Link error %d", error); 
+	ogl(glGenVertexArrays(1, &_vao));
+	ogl(glBindVertexArray(_vao));
+	ogl(glGenBuffers(1, &_vbo));
+	ogl(glGenBuffers(1, &_vbo_idx));
+	
+	ogl(_programId = glCreateProgram());
 
-	error = CVDisplayLinkSetOutputCallback(displayLink, displayCallback, self);
-	NSAssert((kCVReturnSuccess == error),
-		@"Setting Display Link callback error %d", error);
-	CVDisplayLinkStart(displayLink);
+	const char * const vsrc = VERT;
+	const char * const fsrc = FRAG;
+
+	GLuint vert, frag;
+	ogl(vert = glCreateShader(GL_VERTEX_SHADER));
+	ogl(frag = glCreateShader(GL_FRAGMENT_SHADER));
+
+	ogl(glShaderSource(vert, 1, &vsrc, NULL));
+	ogl(glCompileShader(vert));
+	oglShaderLog(vert);
+
+	ogl(glShaderSource(frag, 1, &fsrc, NULL));
+	ogl(glCompileShader(frag));
+	oglShaderLog(frag);
+
+	ogl(glAttachShader(_programId, frag));
+	ogl(glAttachShader(_programId, vert));
+
+	ogl(glBindAttribLocation(_programId, 0, "position"));
+	ogl(glBindAttribLocation(_programId, 1, "color"));
+	ogl(glBindAttribLocation(_programId, 2, "texcoord"));
+	ogl(glBindFragDataLocation(_programId, 0, "out_color"));
+
+	ogl(glLinkProgram(_programId));
+	ogl(oglProgramLog(_programId));
+
+	ogl(glGenTextures(3, _textures));
+	
+	glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+	ogl(glEnable(GL_DEPTH_TEST));
+	ogl(glEnable(GL_BLEND));
+    ogl(glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA));
+	
+	//XXX: fix this
+	init = 1;
 }
 
 -(void)renderQuad
 {
-	const float side = 0.7f;
-	GLfloat data[] = {
-		//vertex coordinates
-		-side, -side, 0.0f,
-		side, -side, 0.0f,
-		side, side, 0.0f,
-		-side, side, 0.0f,
-
-		//colors
-		1, 0, 0,
-		0, 1, 0,
-		0, 0, 1,
-		1, 1, 1,
-
-		//texture coordinates
-		0, 0,
-		1, 0,
-		1, 1,
-		0, 1,
-	};
-
-	GLuint indices[] = {
-		0, 1, 2,
-		0, 2, 3,
-	};
-
 	GLfloat mvp_data[16] = {
 	};
 
 	float aspect = ((float)self.frame.size.width)/self.frame.size.height;
 	projMatrix(mvp_data, 45.0, aspect, 1.0, 100.0);
 
-	size_t vtxStride = 3;
-	size_t colStride = 3;
-	size_t texStride = 2;
-	size_t numVertices = 4;
-	size_t numIndices = sizeof(indices)/sizeof(indices[0]);
+	GLuint texUniform;
 
-	size_t coordOffset = 0;
-	size_t colorOffset = 12;
-	size_t texOffset = 24;
+	ogl(glUseProgram(_programId));
+	ogl(glBindVertexArray(_vao));
+	ogl(_positionAttr = glGetAttribLocation(_programId, "position"));
+	ogl(_colorAttr = glGetAttribLocation(_programId, "color"));
+	ogl(_texCoordAttr = glGetAttribLocation(_programId, "texcoord"));
+	ogl(texUniform = glGetUniformLocation(_programId, "sTexture"));
+	//ogl(MVP = glGetUniformLocation(_programId, "MVP"));
 
-	static GLuint pid = 0;
-	static GLuint vao = 0;
-	static GLuint vbo = 0, vbo_idx = 0;
+	ogl(glBindBuffer(GL_ARRAY_BUFFER, _vbo));
+	ogl(glBufferData(GL_ARRAY_BUFFER, sizeof(QuadData), QuadData, GL_STATIC_DRAW));
 
-	static int init = 0;
-	if (!init) {
-		// should really do this on context loss/reinit
-		ogl(glGenVertexArrays(1, &vao));
-		ogl(glBindVertexArray(vao));
-		ogl(glGenBuffers(1, &vbo));
-		ogl(glGenBuffers(1, &vbo_idx));
-		
-		ogl(pid = glCreateProgram());
-
-		const char * const vsrc = VERT;
-		const char * const fsrc = FRAG;
-
-		GLuint vert, frag;
-		ogl(vert = glCreateShader(GL_VERTEX_SHADER));
-		ogl(frag = glCreateShader(GL_FRAGMENT_SHADER));
-
-		ogl(glShaderSource(vert, 1, &vsrc, NULL));
-		ogl(glCompileShader(vert));
-		oglShaderLog(vert);
-
-		ogl(glShaderSource(frag, 1, &fsrc, NULL));
-		ogl(glCompileShader(frag));
-		oglShaderLog(frag);
-
-		ogl(glAttachShader(pid, frag));
-		ogl(glAttachShader(pid, vert));
-
-		ogl(glBindAttribLocation(pid, 0, "position"));
-		ogl(glBindAttribLocation(pid, 1, "color"));
-		ogl(glBindAttribLocation(pid, 2, "texcoord"));
-		ogl(glBindFragDataLocation(pid, 0, "out_color"));
-
-		ogl(glLinkProgram(pid));
-		ogl(oglProgramLog(pid));
-		init = 1;
-	}
-	GLuint positionAttr, colorAttr, texCoordAttr, texUniform, MVP,
-		sampler;
-	
-	ogl(glUseProgram(pid));
-	ogl(glBindVertexArray(vao));
-	ogl(positionAttr = glGetAttribLocation(pid, "position"));
-	ogl(colorAttr = glGetAttribLocation(pid, "color"));
-	ogl(texCoordAttr = glGetAttribLocation(pid, "texcoord"));
-	ogl(texUniform = glGetUniformLocation(pid, "sTexture"));
-	ogl(MVP = glGetUniformLocation(pid, "MVP"));
-	ogl(sampler = glGetUniformLocation(pid, "texture"));
-
-	ogl(glBindBuffer(GL_ARRAY_BUFFER, vbo));
-	ogl(glBufferData(GL_ARRAY_BUFFER, sizeof(data), data, GL_STATIC_DRAW));
-
-	ogl(glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, vbo_idx));
+	ogl(glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, _vbo_idx));
 	ogl(glBufferData(GL_ELEMENT_ARRAY_BUFFER,
-		sizeof(indices), indices, GL_STATIC_DRAW));
+		sizeof(QuadIndices), QuadIndices, GL_STATIC_DRAW));
 
-	ogl(glVertexAttribPointer(positionAttr, vtxStride, GL_FLOAT, GL_FALSE, 0,
-		(GLvoid*)(coordOffset * sizeof(GLfloat))));
-	ogl(glVertexAttribPointer(colorAttr, colStride, GL_FLOAT, GL_FALSE, 0,
-		(GLvoid*)(colorOffset * sizeof(GLfloat))));
-	ogl(glVertexAttribPointer(texCoordAttr, texStride, GL_FLOAT, GL_FALSE, 0,
-		(GLvoid*)(texOffset * sizeof(GLfloat))));
+	ogl(glVertexAttribPointer(_positionAttr, VertexStride,
+		GL_FLOAT, GL_FALSE, 0,
+		(GLvoid*)(CoordOffset * sizeof(GLfloat))));
+	ogl(glVertexAttribPointer(_colorAttr, ColorStride,
+		GL_FLOAT, GL_FALSE, 0,
+		(GLvoid*)(ColorOffset * sizeof(GLfloat))));
+	ogl(glVertexAttribPointer(_texCoordAttr, TexCoordStride,
+		GL_FLOAT, GL_FALSE, 0,
+		(GLvoid*)(TexCoordOffset * sizeof(GLfloat))));
 
-	ogl(glUniformMatrix4fv(MVP, 1, GL_FALSE, mvp_data));
+	//ogl(glUniformMatrix4fv(MVP, 1, GL_FALSE, mvp_data));
 
-	ogl(glEnableVertexAttribArray(positionAttr));
-	ogl(glEnableVertexAttribArray(colorAttr));
-	ogl(glEnableVertexAttribArray(texCoordAttr));
+	ogl(glEnableVertexAttribArray(_positionAttr));
+	ogl(glEnableVertexAttribArray(_colorAttr));
+	ogl(glEnableVertexAttribArray(_texCoordAttr));
 
-	//ogl(glActiveTexture(GL_TEXTURE0));
-	//ogl(glBindTexture(GL_TEXTURE_2D, 0));
-	//ogl(glUniform1i(sampler, 1));
+	ogl(glDrawElements(GL_TRIANGLES, NumIndices, GL_UNSIGNED_INT, 0));
 
-	ogl(glDrawElements(GL_TRIANGLES, numIndices, GL_UNSIGNED_INT, 0));
-	//ogl(glDrawElements(GL_TRIANGLE_FAN, numIndices, GL_UNSIGNED_INT, 0));
-	ogl(glDrawElements(GL_POINTS, numIndices, GL_UNSIGNED_INT, indices));
-	//ogl(glDrawArrays(GL_TRIANGLES, 0, 4));
-
-	ogl(glDisableVertexAttribArray(texCoordAttr));
-	ogl(glDisableVertexAttribArray(colorAttr));
-	ogl(glDisableVertexAttribArray(positionAttr));
+	ogl(glDisableVertexAttribArray(_texCoordAttr));
+	ogl(glDisableVertexAttribArray(_colorAttr));
+	ogl(glDisableVertexAttribArray(_positionAttr));
 
 	ogl(glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0));
 	ogl(glBindBuffer(GL_ARRAY_BUFFER, 0));
@@ -187,13 +169,11 @@ static CVReturn displayCallback(CVDisplayLinkRef displayLink,
 	CGLContextObj contextObj = [[self openGLContext] CGLContextObj];
 	CGLLockContext(contextObj);
 
+	[self initializeContext];
 	ogl(glViewport(0, 0, self.frame.size.width, self.frame.size.height));
-	glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
-	ogl(glEnable(GL_DEPTH_TEST));
-	ogl(glEnable(GL_BLEND));
-    ogl(glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA));
 	ogl(glClearColor(1, 1, 1, 1));
 	ogl(glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT));
+
 	[self renderQuad];
 	[[self openGLContext] flushBuffer];
 
@@ -208,36 +188,24 @@ static CVReturn displayCallback(CVDisplayLinkRef displayLink,
 	CGLContextObj contextObj = [[self openGLContext] CGLContextObj];
 	CGLLockContext(contextObj);
 
-	static int texture = -1;
-	if (texture < 0) {
-		ogl(glGenTextures(1, &texture));
-	}
-	ogl(glBindTexture(GL_TEXTURE_2D, texture));
-		
-	ogl(glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR));
-	ogl(glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR));
-	ogl(glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE));
-	ogl(glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE));
+	for (size_t i = 0; i < 1; i++) {
+		ogl(glBindTexture(GL_TEXTURE_2D, _textures[i]));
+			
+		ogl(glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR));
+		ogl(glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR));
+		ogl(glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE));
+		ogl(glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE));
 
-	ogl(glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB,
-		frame->linesize[0],
-		frame->height, 0, GL_RED,
-		GL_UNSIGNED_BYTE, frame->data[0]));
+		ogl(glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB,
+			frame->linesize[0],
+			frame->height, 0, GL_RED,
+			GL_UNSIGNED_BYTE, frame->data[0]));
+	}
 
 	ogl(glActiveTexture(GL_TEXTURE0));
 	
 	CGLUnlockContext(contextObj);
 	[self unlockFocus];
-}
-
--(void)dealloc
-{
-	[super dealloc];
-}
-
--(void)windowWillClose:(NSNotification *)note {
-	CVDisplayLinkRelease(displayLink);
-	[[NSApplication sharedApplication] terminate:self];
 }
 @end
 

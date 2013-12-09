@@ -27,8 +27,8 @@ const char * const VERT = "#version 150 core\n" QUOTE(
 
 	void main(void) {
 		gl_Position = position;
-		vert_color=color;
-		vert_texcoord=texcoord;
+		vert_color = color;
+		vert_texcoord = texcoord;
 	}
 );
 
@@ -44,6 +44,7 @@ static inline void oglShaderLog(int sid) {
 	}
 	char* log = (char*)malloc(logLen);
 	if (!log) {
+		NSLog(@"Failed to allocate memory for the shader log");
 		return;
 	}
 	glGetShaderInfoLog(sid, logLen, &realLen, log);

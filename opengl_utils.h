@@ -21,6 +21,7 @@ static inline void oglProgramLog(int pid) {
 	}
 	char* log = (char*)malloc(logLen);
 	if (!log) {
+		NSLog(@"Failed to allocate memory for the program log");
 		return;
 	}
 	glGetProgramInfoLog(pid, logLen, &realLen, log);

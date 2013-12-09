@@ -1,12 +1,15 @@
 #ifndef __FFMPEG_VIEW__H__
 #define __FFMPEG_VIEW__H__
 
-#import "common.h"
+#import "opengl_view.h"
 
-@interface FfmpegView : NSOpenGLView <NSWindowDelegate>
--(void)registerDisplayLink;
+#include <libavformat/avformat.h>
+#include <libavcodec/avcodec.h>
+#include <libswscale/swscale.h>
+
+@interface FfmpegView : MyOpenGLViewBase
 -(void)renderForTime:(CVTimeStamp)time;
--(void)windowWillClose:(NSNotification*)note;
+-(void)setTexture:(AVFrame*)frame;
 @end
 
 #endif //__FFMPEG_VIEW__H__
