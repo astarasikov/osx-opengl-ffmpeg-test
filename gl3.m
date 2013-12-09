@@ -220,7 +220,8 @@ static CVReturn displayCallback(CVDisplayLinkRef displayLink,
 	ogl(glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE));
 
 	ogl(glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB,
-		frame->width, frame->height, 0, GL_RED,
+		frame->linesize[0],
+		frame->height, 0, GL_RED,
 		GL_UNSIGNED_BYTE, frame->data[0]));
 
 	ogl(glActiveTexture(GL_TEXTURE0));
