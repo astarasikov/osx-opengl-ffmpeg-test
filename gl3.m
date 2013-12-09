@@ -104,30 +104,34 @@ static const size_t NumIndices = 6;//sizeof(QuadIndices) / sizeof(QuadIndices[0]
 	ogl(glEnable(GL_BLEND));
     ogl(glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA));
 	
+	ogl(_positionAttr = glGetAttribLocation(_programId, "position"));
+	ogl(_colorAttr = glGetAttribLocation(_programId, "color"));
+	ogl(_texCoordAttr = glGetAttribLocation(_programId, "texcoord"));
+
 	//XXX: fix this
 	init = 1;
 }
 
 -(void)renderQuad
 {
-	GLfloat mvp_data[16] = {
-	};
-
-	float aspect = ((float)self.frame.size.width)/self.frame.size.height;
-	projMatrix(mvp_data, 45.0, aspect, 1.0, 100.0);
-
-	GLuint texUniform;
-
 	ogl(glUseProgram(_programId));
+	
+	GLuint texLoc[3];
+	const char * const texNames[3] = {
+		"texture_Y",
+		"texture_U",
+		"texture_V",
+	};
+	for (size_t i = 0; i < 3; i++) {
+		ogl(texLoc[i] = glGetUniformLocation(_programId, texNames[i]));
+		ogl(glUniform1i(texLoc[i], i));
+	}
+
 	ogl(glBindVertexArray(_vao));
-	ogl(_positionAttr = glGetAttribLocation(_programId, "position"));
-	ogl(_colorAttr = glGetAttribLocation(_programId, "color"));
-	ogl(_texCoordAttr = glGetAttribLocation(_programId, "texcoord"));
-	ogl(texUniform = glGetUniformLocation(_programId, "sTexture"));
-	//ogl(MVP = glGetUniformLocation(_programId, "MVP"));
 
 	ogl(glBindBuffer(GL_ARRAY_BUFFER, _vbo));
-	ogl(glBufferData(GL_ARRAY_BUFFER, sizeof(QuadData), QuadData, GL_STATIC_DRAW));
+	ogl(glBufferData(GL_ARRAY_BUFFER,
+		sizeof(QuadData), QuadData, GL_STATIC_DRAW));
 
 	ogl(glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, _vbo_idx));
 	ogl(glBufferData(GL_ELEMENT_ARRAY_BUFFER,
@@ -142,8 +146,6 @@ static const size_t NumIndices = 6;//sizeof(QuadIndices) / sizeof(QuadIndices[0]
 	ogl(glVertexAttribPointer(_texCoordAttr, TexCoordStride,
 		GL_FLOAT, GL_FALSE, 0,
 		(GLvoid*)(TexCoordOffset * sizeof(GLfloat))));
-
-	//ogl(glUniformMatrix4fv(MVP, 1, GL_FALSE, mvp_data));
 
 	ogl(glEnableVertexAttribArray(_positionAttr));
 	ogl(glEnableVertexAttribArray(_colorAttr));
@@ -188,7 +190,8 @@ static const size_t NumIndices = 6;//sizeof(QuadIndices) / sizeof(QuadIndices[0]
 	CGLContextObj contextObj = [[self openGLContext] CGLContextObj];
 	CGLLockContext(contextObj);
 
-	for (size_t i = 0; i < 1; i++) {
+	for (size_t i = 0; i < 3; i++) {
+		ogl(glActiveTexture(GL_TEXTURE0 + i));
 		ogl(glBindTexture(GL_TEXTURE_2D, _textures[i]));
 			
 		ogl(glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR));
@@ -197,13 +200,12 @@ static const size_t NumIndices = 6;//sizeof(QuadIndices) / sizeof(QuadIndices[0]
 		ogl(glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE));
 
 		ogl(glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB,
-			frame->linesize[0],
-			frame->height, 0, GL_RED,
-			GL_UNSIGNED_BYTE, frame->data[0]));
+			frame->linesize[i],
+			frame->height >> (!!i), //divide by two for U and V components
+			0, GL_RED,
+			GL_UNSIGNED_BYTE, frame->data[i]));
 	}
 
-	ogl(glActiveTexture(GL_TEXTURE0));
-	
 	CGLUnlockContext(contextObj);
 	[self unlockFocus];
 }
